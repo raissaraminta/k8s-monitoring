@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K8s Daily Monitoring Dashboard</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="style.css" rel="stylesheet">
+</head>
+<body>
+<nav class="navbar app-nav sticky-top px-3">
+  <span class="navbar-brand text-white fw-bold mb-0"><i class="fa-solid fa-dharmachakra me-2"></i>K8s Daily Monitoring</span>
+  <div class="d-flex align-items-center gap-3">
+    <span id="cs" class="cs off">🔴 Offline</span>
+    <div class="dropdown">
+      <button class="btn btn-light btn-sm dropdown-toggle fw-semibold" data-bs-toggle="dropdown"><i class="fa-solid fa-database me-1"></i>Data Management</button>
+      <ul class="dropdown-menu dropdown-menu-end">
+        <li><a class="dropdown-item" href="#" id="bkExp"><i class="fa-solid fa-download me-2"></i>Export Backup (.json)</a></li>
+        <li><a class="dropdown-item" href="#" id="bkImp"><i class="fa-solid fa-upload me-2"></i>Import Backup (.json)</a></li>
+        <li><hr class="dropdown-divider"></li>
+        <li><a class="dropdown-item text-danger" href="#" id="rst"><i class="fa-solid fa-trash-can me-2"></i>Reset Data</a></li>
+      </ul>
+    </div>
+  </div>
+</nav>
+<input type="file" id="bkFile" accept=".json" hidden>
+
+<main class="container-fluid px-3 px-lg-4 py-3">
+  <!-- KPI -->
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-xl-3"><div class="card kpi"><div class="kl"><i class="fa-solid fa-server"></i>Total Workers</div><div id="k1"></div></div></div>
+    <div class="col-6 col-xl-3"><div class="card kpi"><div class="kl"><i class="fa-solid fa-cubes"></i>Total Pods</div><div id="k2"></div></div></div>
+    <div class="col-6 col-xl-3"><div class="card kpi"><div class="kl"><i class="fa-solid fa-gauge-high"></i>Peak CPU / Memory Node</div><div id="k3"></div></div></div>
+    <div class="col-6 col-xl-3"><div class="card kpi"><div class="kl"><i class="fa-solid fa-heart-pulse"></i>Overall Health</div><div id="k4"></div></div></div>
+  </div>
+
+  <!-- Quick Copy Report -->
+  <div class="card p-3 mb-3">
+    <div class="d-flex flex-wrap align-items-center gap-2">
+      <div class="fw-bold me-auto"><i class="fa-solid fa-paper-plane me-2 text-success"></i>Quick Copy Report</div>
+      <label class="small text-muted mb-0">Tanggal Data</label>
+      <select id="dsel" class="form-select form-select-sm w-auto"></select>
+      <button id="cpD" class="btn btn-primary btn-sm"><i class="fa-regular fa-copy me-1"></i>Copy Daily Report (WA/Teams)</button>
+      <button id="cpM" class="btn btn-primary btn-sm"><i class="fa-regular fa-copy me-1"></i>Copy Monthly Report (WA/Teams)</button>
+    </div>
+  </div>
+
+  <!-- Main Tabs -->
+  <ul class="nav nav-pills mb-3 gap-1" id="mainTabs">
+    <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#p1" data-t="t1">Executive Summary</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#p2" data-t="t2">Node Analytics</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#p3" data-t="t3">CLI Parser &amp; Data Detail</button></li>
+  </ul>
+
+  <div class="tab-content">
+    <!-- TAB 1 -->
+    <div class="tab-pane fade show active" id="p1">
+      <div class="card p-3">
+        <div class="row g-2 align-items-end mb-3">
+          <div class="col-6 col-md-2"><label class="form-label small mb-1">Dari Tanggal</label><input type="date" id="fFrom" class="form-control form-control-sm"></div>
+          <div class="col-6 col-md-2"><label class="form-label small mb-1">Sampai Tanggal</label><input type="date" id="fTo" class="form-control form-control-sm"></div>
+          <div class="col-6 col-md-2"><label class="form-label small mb-1">Bulan</label><input type="month" id="fMon" class="form-control form-control-sm"></div>
+          <div class="col-auto"><button id="fClr" class="btn btn-sm btn-outline-secondary">Reset Filter</button></div>
+          <div class="col-auto ms-md-auto"><button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#mEx"><i class="fa-solid fa-file-export me-1"></i>Export Excel/CSV</button></div>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead><tr><th>Tanggal</th><th>Environment</th><th>Worker Ready</th><th>Worker Not Ready</th><th>Running Pod</th><th>Failed Pod</th><th>Deployment Available</th><th>Worker CPU Tertinggi (%)</th><th>Worker Memory Tertinggi (%)</th><th>Pods CPU Tertinggi (%)</th><th>Pods Memory Tertinggi (%)</th><th>Overall Status</th><th>Aksi</th></tr></thead>
+            <tbody id="tb1"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2 -->
+    <div class="tab-pane fade" id="p2">
+      <div class="card p-3 mb-3 d-flex flex-row flex-wrap align-items-center gap-3">
+        <div class="btn-group btn-group-sm">
+          <input type="radio" class="btn-check" name="cv" id="cvD" value="d" checked><label class="btn btn-outline-success" for="cvD">Daily (Bar)</label>
+          <input type="radio" class="btn-check" name="cv" id="cvM" value="m"><label class="btn btn-outline-success" for="cvM">Monthly (Line)</label>
+        </div>
+        <span id="cdTxt" class="small text-muted">Mengikuti "Tanggal Data" di atas</span>
+        <div id="cmonW" class="d-none d-flex align-items-center gap-2"><label class="small mb-0">Bulan</label><input type="month" id="cmon" class="form-control form-control-sm w-auto"></div>
+      </div>
+      <div class="row g-3">
+        <div class="col-12 col-xl-6"><div class="card p-3"><div class="chart-box"><canvas id="c1"></canvas></div></div></div>
+        <div class="col-12 col-xl-6"><div class="card p-3"><div class="chart-box"><canvas id="c2"></canvas></div></div></div>
+        <div class="col-12 col-xl-6"><div class="card p-3"><div class="chart-box"><canvas id="c3"></canvas></div></div></div>
+      </div>
+    </div>
+
+    <!-- TAB 3 -->
+    <div class="tab-pane fade" id="p3">
+      <div class="row g-3 mb-3">
+        <div class="col-12 col-xl-6">
+          <div class="card p-3 h-100">
+            <div class="d-flex align-items-center mb-2"><div class="fw-bold me-auto"><i class="fa-solid fa-terminal me-2 text-success"></i>CLI Command Helper</div><button id="cpCmd" class="btn btn-primary btn-sm"><i class="fa-regular fa-copy me-1"></i>Copy Command</button></div>
+            <pre class="cmd mb-0"><code id="cmdTxt"></code></pre>
+          </div>
+        </div>
+        <div class="col-12 col-xl-6">
+          <div class="card p-3 h-100">
+            <div class="fw-bold mb-2"><i class="fa-solid fa-paste me-2 text-success"></i>Paste Output Terminal</div>
+            <div class="d-flex gap-2 mb-2"><label class="small align-self-center mb-0">Tanggal</label><input type="date" id="pdate" class="form-control form-control-sm w-auto"></div>
+            <textarea id="cli" class="form-control mb-2" rows="5" placeholder="Paste hasil command (=== WORKER NODES === ... ) di sini"></textarea>
+            <div class="d-flex gap-2"><button id="goParse" class="btn btn-primary btn-sm"><i class="fa-solid fa-cloud-arrow-up me-1"></i>Parse &amp; Simpan</button><button id="clr" class="btn btn-outline-secondary btn-sm">Bersihkan</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="card p-3">
+        <div class="input-group input-group-sm mb-3" style="max-width:360px"><span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span><input id="q" class="form-control" placeholder="Cari worker, pod, atau deployment..."></div>
+        <ul class="nav nav-tabs mb-3">
+          <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#s1">Worker Monitoring</button></li>
+          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#s2">Pod Monitoring</button></li>
+          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#s3">Deployment Health</button></li>
+        </ul>
+        <div class="tab-content">
+          <div class="tab-pane fade show active" id="s1"><div class="table-responsive"><table class="table table-sm align-middle"><thead><tr><th>Worker IP</th><th>Status</th><th>CPU %</th><th>Memory %</th><th>Disk %</th><th>Remark</th></tr></thead><tbody id="tb2"></tbody></table></div></div>
+          <div class="tab-pane fade" id="s2"><div class="table-responsive"><table class="table table-sm align-middle"><thead><tr><th>Pod Name</th><th>Node</th><th>Namespace</th><th>Status</th><th>Restart Count</th><th>CPU</th><th>Memory</th><th>Age</th></tr></thead><tbody id="tb3"></tbody></table></div></div>
+          <div class="tab-pane fade" id="s3"><div class="table-responsive"><table class="table table-sm align-middle"><thead><tr><th>Deployment</th><th>Ready</th><th>Available</th><th>Age</th></tr></thead><tbody id="tb4"></tbody></table></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- Modal Export -->
+<div class="modal fade" id="mEx" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+  <div class="modal-header"><h6 class="modal-title fw-bold">Export Data</h6><button class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body">
+    <div class="mb-3"><div class="small fw-semibold mb-1">Format File</div>
+      <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="xf" id="xfX" value="x" checked><label class="form-check-label" for="xfX">.xlsx (4 Sheet)</label></div>
+      <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="xf" id="xfC" value="c"><label class="form-check-label" for="xfC">.csv</label></div></div>
+    <div class="mb-3"><div class="small fw-semibold mb-1">Range Waktu</div>
+      <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="xr" id="xrD" value="d" checked><label class="form-check-label" for="xrD">Export Harian</label></div>
+      <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="xr" id="xrM" value="m"><label class="form-check-label" for="xrM">Export Bulanan</label></div></div>
+    <div><label class="small fw-semibold mb-1">Tanggal / Bulan Acuan</label><input type="date" id="exDate" class="form-control form-control-sm"></div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-light btn-sm" data-bs-dismiss="modal">Batal</button><button id="exGo" class="btn btn-primary btn-sm"><i class="fa-solid fa-download me-1"></i>Unduh</button></div>
+</div></div></div>
+
+<!-- Modal Konfirmasi -->
+<div class="modal fade" id="mCf" tabindex="-1"><div class="modal-dialog modal-dialog-centered modal-sm"><div class="modal-content">
+  <div class="modal-header"><h6 class="modal-title fw-bold">Konfirmasi</h6><button class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body" id="cmMsg"></div>
+  <div class="modal-footer"><button class="btn btn-light btn-sm" data-bs-dismiss="modal">Batal</button><button id="cmOk" class="btn btn-danger btn-sm">Ya, Lanjutkan</button></div>
+</div></div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
