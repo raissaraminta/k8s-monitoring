@@ -2,6 +2,7 @@
 const firebaseConfig = {
   apiKey: "AIzaSyCbS4BwZn-znx3c9VZk3WQFP_I1nys2iHY",
   authDomain: "k8s-monitoring-ito.firebaseapp.com",
+  databaseURL: "https://k8s-monitoring-ito-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "k8s-monitoring-ito",
   storageBucket: "k8s-monitoring-ito.firebasestorage.app",
   messagingSenderId: "761218011895",
