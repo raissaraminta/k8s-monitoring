@@ -24,6 +24,7 @@ const R = v => { const n = parseFloat(v); return isNaN(n) ? null : Math.round(n)
 const P = v => v == null ? '-' : v + '%';
 const fd = d => d.slice(0, 10).split('-').reverse().join('/');   // aman untuk tanggal maupun recordId
 const REC = 'k8s_monitoring/records/', DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function sanitizeKey(s) { return String(s || '').replace(/[\.#$\[\]\-]/g, '_'); }   // karakter terlarang & strip -> "_"
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const dates = () => Object.keys(DB).sort();
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
@@ -51,7 +52,7 @@ function initFirebase() {
       DB = s.val() || {};   // key = recordId (YYYY-MM-DD_Environment)
       if (!cur || !DB[cur]) cur = dates().slice(-1)[0] || null;
       render();
-    }, e => { setCS(false); toast('Gagal membaca database: ' + e.message, 'danger'); });
+    }, e => { console.error('Firebase Read Error:', e); setCS(false); toast('Gagal membaca database: ' + e.message, 'danger'); });
   } catch (e) { setCS(false); toast('Firebase belum dikonfigurasi (cek firebaseConfig di app.js)', 'danger'); }
 }
 
@@ -104,13 +105,19 @@ function doParse() {
   if (!date || !txt.trim()) return toast('Isi tanggal dan paste output terminal', 'danger');
   const r = parse(txt);
   if (!r) return toast('Header "=== WORKER NODES ===" dst. tidak ditemukan atau tabel kosong', 'danger');
-  const id = `${date}_${ENV}`, old = A((DB[id] || {}).workers);
+  const cleanEnv = sanitizeKey(ENV), id = `${date}_${cleanEnv}`, old = A((DB[id] || {}).workers);   // 2026-10-29_Prod_BTN_Syariah_Kubernetes
   r.workers.forEach(w => { const o = old.find(x => x.ip === w.ip); if (o && o.lock) { w.disk = o.disk; w.lock = true; } });   // pertahankan Disk terkunci
   const rec = { id, date, env: ENV, ...r }; rec.summary = summary(rec);
   cur = id;
-  firebase.database().ref(REC + id).set(JSON.parse(JSON.stringify(rec)))
-    .then(() => { toast(`Tersimpan ${id}: ${r.workers.length} worker, ${r.pods.length} pod, ${r.deployments.length} deployment`); $('cli').value = ''; })
-    .catch(e => toast('Gagal menyimpan: ' + e.message, 'danger'));
+  firebase.database().ref('k8s_monitoring/records/' + id).set(JSON.parse(JSON.stringify(rec)))
+    .then(() => {
+      toast(`Berhasil tersimpan ke Cloud Firebase!`);
+      $('cli').value = '';
+    })
+    .catch(e => {
+      console.error("Firebase Set Error:", e);
+      alert("Gagal menyimpan ke Firebase: " + e.message);
+    });
 }
 
 /* ============ RINGKASAN & RUMUS ============ */
@@ -264,8 +271,7 @@ function norm(r) {   // normalisasi 1 record (format lama / baru) -> struktur Fi
   if (!r || typeof r !== 'object') return null;
   const raw = String(r.id || ''), parts = raw.split(/[|_]/), date = String(r.date || parts[0]).slice(0, 10);
   if (!DATE_RE.test(date)) return null;
-  const env = r.env || r.environment || parts.slice(1).join('_') || ENV;
-  const id = (raw || `${date}_${env}`).replace(/\|/g, '_').replace(/[.#$\[\]\/]/g, '-');
+  const cleanId = `${date}_${sanitizeKey(ENV)}`;   // sama persis dengan ID dari doParse()
   const workers = A(r.workers).map(w => { const disk = R(pick(w, 'disk', 'diskPct', 'disk%', 'diskPercent')); return { ip: String(pick(w, 'ip', 'name', 'node', 'worker') || '-'), status: String(pick(w, 'status') || '-'), cpu: R(pick(w, 'cpu', 'cpuPct', 'cpu%', 'cpuPercent')), mem: R(pick(w, 'mem', 'memory', 'memPct', 'mem%', 'memoryPct', 'memoryPercent')), disk, lock: disk != null }; });
   const pods = A(r.pods).map(p => ({ name: String(pick(p, 'name', 'pod', 'podName') || '-'), node: String(pick(p, 'node', 'nodeName') || '-'), ns: String(pick(p, 'ns', 'namespace') || NS), status: String(pick(p, 'status', 'phase') || '-'), restarts: parseInt(pick(p, 'restarts', 'restart', 'restartCount')) || 0, cpu: U(pick(p, 'cpu'), 'm'), mem: U(pick(p, 'mem', 'memory'), 'Mi'), age: String(pick(p, 'age') || '-') }));
   const deployments = A(r.deps ?? r.deployments).map(d => {
@@ -273,7 +279,7 @@ function norm(r) {   // normalisasi 1 record (format lama / baru) -> struktur Fi
     const avail = parseInt(pick(d, 'available', 'avail', 'availableReplicas') ?? (m ? m[1] : 0)) || 0, desired = m ? +m[2] : (parseInt(pick(d, 'desired', 'replicas')) || 0);
     return { name: String(pick(d, 'name', 'deployment') || '-'), ready: m ? rd : `${avail}/${desired}`, desired, avail, age: String(pick(d, 'age') || '-') };
   });
-  const rec = { id, date, env, workers, pods, deployments };
+  const rec = { id: cleanId, date, env: ENV, workers, pods, deployments };
   rec.summary = r.summary && r.summary.overall ? r.summary : summary(rec);   // hitung ulang jika belum ada
   return rec;
 }
@@ -300,7 +306,7 @@ $('bkFile').onchange = e => {
       if (!ok.length) throw new Error('Tidak ada record valid di file ini');
       await Promise.all(ok.map(r => firebase.database().ref(REC + r.id).set(JSON.parse(JSON.stringify(r)))));
       notify(`Berhasil mengimpor ${ok.length} data harian dari ${legacy ? 'JSON lama' : 'file backup'} ke Firebase Cloud!` + (recs.length > ok.length ? ` (${recs.length - ok.length} record dilewati karena tidak valid)` : ''));
-    } catch (x) { notify('Import gagal: ' + (x instanceof SyntaxError ? 'file bukan JSON yang valid' : x.message), false); }
+    } catch (x) { console.error('Firebase Import Error:', x); notify('Import gagal: ' + (x instanceof SyntaxError ? 'file bukan JSON yang valid' : x.message), false); }
     e.target.value = '';
   };
   rd.readAsText(f);
