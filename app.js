@@ -209,11 +209,67 @@ function daily() {
     `*Pods CPU Tertinggi*: ${s.pc}`, `*Pods Memory Tertinggi*: ${s.pm}`, '', `*Overall Status*: ${SL[s.st]}`].join('\n');
 }
 function monthly() {
-  const m = (cur || '').slice(0, 7), ds = dates().filter(d => d.startsWith(m)); if (!ds.length) return toast('Belum ada data bulan ini', 'danger');
-  const S = ds.map(d => [d, sm(DB[d])]), n = k => S.filter(x => x[1].st === k).length;
-  return ['*📅 MONTHLY REPORT KUBERNETES*', `Environment: ${ENV}`, `Periode: ${m.split('-').reverse().join('/')}`, `Hari Tercatat: ${ds.length}`,
-    `🟢 ${n('HEALTHY')} | 🟡 ${n('WARNING')} | 🔴 ${n('CRITICAL')}`, '', 'Tgl | Worker Ready/NotReady | Pod Run/Failed | Dep | CPU | Mem | Status',
-    ...S.map(([d, s]) => `${fd(d).slice(0, 5)} | ${s.ready}/${s.nr} | ${s.run}/${s.fail} | ${s.da}/${s.td} | ${P(s.H)} | ${P(s.I)} | ${SL[s.st]}`)].join('\n');
+  const m = (cur || '').slice(0, 7);
+  const ds = dates().filter(d => d.startsWith(m));
+  if (!ds.length) return toast('Belum ada data bulan ini', 'danger');
+
+  const S = ds.map(d => ({ id: d, date: fd(d), s: sm(DB[d]) }));
+  const countSt = k => S.filter(x => x.s.st === k).length;
+
+  // Format nama bulan (misal: "11/2026" -> "November 2026")
+  const [yr, mo] = m.split('-');
+  const namaBulan = new Date(yr, parseInt(mo) - 1, 1).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+
+  // Hitung rata-rata & total insiden
+  const avgRun = Math.round(S.reduce((acc, x) => acc + x.s.run, 0) / S.length);
+  const totalFail = S.reduce((acc, x) => acc + x.s.fail, 0);
+  const totalNotReady = S.reduce((acc, x) => acc + x.s.nr, 0);
+  const latest = S[S.length - 1].s;
+
+  // Cari Peak Usage sebulan beserta tanggal kejadiannya
+  let maxCpu = { val: -1, date: '-' }, maxMem = { val: -1, date: '-' };
+  let maxPodCpu = { val: -1, str: '-', date: '-' }, maxPodMem = { val: -1, str: '-', date: '-' };
+
+  S.forEach(({ date, s }) => {
+    if (s.H != null && s.H > maxCpu.val) maxCpu = { val: s.H, date };
+    if (s.I != null && s.I > maxMem.val) maxMem = { val: s.I, date };
+    
+    const pCpuNum = parseInt(s.pc);
+    if (!isNaN(pCpuNum) && pCpuNum > maxPodCpu.val) maxPodCpu = { val: pCpuNum, str: s.pc, date };
+    
+    const pMemNum = parseInt(s.pm);
+    if (!isNaN(pMemNum) && pMemNum > maxPodMem.val) maxPodMem = { val: pMemNum, str: s.pm, date };
+  });
+
+  // Status keseluruhan bulan
+  const critDays = countSt('CRITICAL'), warnDays = countSt('WARNING');
+  const overallMonth = critDays > 0 ? '🔴 PERLU PERHATIAN (Terdapat Hari Critical)' 
+                     : warnDays > 0 ? '🟡 CUKUP STABIL (Terdapat Hari Warning)' 
+                     : '🟢 STABIL / HEALTHY';
+
+  return [
+    '*📅 MONTHLY SUMMARY REPORT KUBERNETES*',
+    `*Environment*: ${ENV}`,
+    `*Periode*: ${namaBulan} (${ds.length} Hari Tercatat)`,
+    '',
+    '*📊 Ringkasan Status Cluster*',
+    `• 🟢 Healthy: ${countSt('HEALTHY')} Hari`,
+    `• 🟡 Warning: ${warnDays} Hari`,
+    `• 🔴 Critical: ${critDays} Hari`,
+    '',
+    '*⚙️ Stabilitas Infrastruktur & Workload*',
+    `• *Worker Nodes*: ${latest.ready}/${latest.w.length} Ready (${totalNotReady} Insiden Not Ready)`,
+    `• *Pods Status*: Rata-rata ${avgRun} Running (Total ${totalFail} Failed)`,
+    `• *Deployments*: ${latest.da}/${latest.td} Available`,
+    '',
+    '*📈 Puncak Penggunaan Resource (Peak Usage)*',
+    `• *Peak Worker CPU*: ${maxCpu.val >= 0 ? maxCpu.val + '% (' + maxCpu.date + ')' : '-'}`,
+    `• *Peak Worker Memory*: ${maxMem.val >= 0 ? maxMem.val + '% (' + maxMem.date + ')' : '-'}`,
+    `• *Peak Pods CPU*: ${maxPodCpu.val >= 0 ? maxPodCpu.str + ' (' + maxPodCpu.date + ')' : '-'}`,
+    `• *Peak Pods Memory*: ${maxPodMem.val >= 0 ? maxPodMem.str + ' (' + maxPodMem.date + ')' : '-'}`,
+    '',
+    `*Kesimpulan Kesehatan Bulanan*: ${overallMonth}`
+  ].join('\n');
 }
 
 /* ============ EXPORT EXCEL / CSV ============ */
