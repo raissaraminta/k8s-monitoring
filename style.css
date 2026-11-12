@@ -32,3 +32,12 @@ pre.cmd{background:#0F172A;color:#E2E8F0;padding:.8rem;border-radius:8px;font-si
 .toast-lite.danger{background:#B91C1C}
 .app-foot{padding:1rem;text-align:center;font-size:.78rem}
 .db-pill{display:inline-block;padding:.3rem .85rem;border-radius:999px;background:#fff;border:1px solid var(--bd)}
+
+/* ===== Login Overlay ===== */
+body.locked{overflow:hidden}
+body.locked>*:not(#loginOverlay){visibility:hidden}
+.login-overlay{position:fixed;inset:0;z-index:3000;display:flex;align-items:center;justify-content:center;padding:1rem;background:linear-gradient(135deg,#046748 0%,#035038 60%,#022c20 100%)}
+.login-card{width:100%;max-width:400px;padding:2rem;box-shadow:0 20px 50px -10px rgba(0,0,0,.35)}
+.login-logo{width:56px;height:56px;margin:0 auto 1rem;border-radius:14px;background:#DCFCE7;color:var(--p);display:flex;align-items:center;justify-content:center;font-size:1.6rem}
+.login-card .form-control:focus{border-color:var(--p);box-shadow:0 0 0 .2rem rgba(4,103,72,.2)}
+.user-email{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#fff;font-size:.8rem}
