@@ -21,7 +21,7 @@ let DB = {}, cur = null, ref = null, charts = [], tabNow = 't1', cfm = null, las
 const $ = id => document.getElementById(id);
 const A = x => x ? Object.values(x) : [];
 const R = v => { const n = parseFloat(v); return isNaN(n) ? null : Math.round(n); };   // Math.round standar
-const P = v => v == null ? '-' : v + '%';
+const P = v => v == null ? '' : v + '%';   // null/kosong => blank; 0 => "0%"
 const fd = d => d.slice(0, 10).split('-').reverse().join('/');   // aman untuk tanggal maupun recordId
 const REC = 'k8s_monitoring/records/', DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function sanitizeKey(s) { return String(s || '').replace(/[\.#$\[\]\-]/g, '_'); }   // karakter terlarang & strip -> "_"
@@ -29,7 +29,7 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '
 const dates = () => Object.keys(DB).sort();
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
 const bd = s => `<span class="bdg ${s}">${SL[s]}</span>`;
-const pb = s => `<span class="bdg ${/^(running|completed|succeeded)$/i.test(s) ? 'HEALTHY' : /pending|creating|init|terminating/i.test(s) ? 'WARNING' : 'CRITICAL'}">${esc(s)}</span>`;
+const pb = s => !s ? '' : `<span class="bdg ${/^(running|completed|succeeded)$/i.test(s) ? 'HEALTHY' : /pending|creating|init|terminating/i.test(s) ? 'WARNING' : 'CRITICAL'}">${esc(s)}</span>`;
 const rm = w => { const v = [w.cpu, w.mem, w.disk].map(x => x || 0); return v.some(x => x > 90) ? 'CRITICAL' : v.some(x => x >= 70) ? 'WARNING' : 'HEALTHY'; };
 const dl = (blob, name) => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); };
 function toast(m, t = 'success') { const d = document.createElement('div'); d.className = 'toast-lite ' + t; d.textContent = m; document.body.appendChild(d); setTimeout(() => d.remove(), 3200); }
@@ -77,30 +77,31 @@ function tables(txt) {
   return out;
 }
 const find = (tb, k) => tb.find(t => t.h.includes(k));
-const zero = v => !v || /^0+(m|mi)?$/i.test(v) ? '-' : v;   // kosong / 0m / 0Mi => "-"
+const mv = v => !v || v === '-' || /^<?unknown>?$/i.test(v) ? '' : v;   // metrics kosong/unknown => ""; "0m" & "0Mi" dipertahankan apa adanya
+const numOrNull = n => isNaN(n) ? null : n;
 function parse(txt) {
   const S = split(txt), w = tables(S['WORKER NODES'] || ''), p = tables(S['PODS STATUS'] || ''), d = tables(S['DEPLOYMENTS STATUS'] || '');
-  const nodes = {}, mk = ip => nodes[ip] || (nodes[ip] = { ip, status: '-', cpu: null, mem: null, disk: null, lock: false });
+  const nodes = {}, mk = ip => nodes[ip] || (nodes[ip] = { ip, status: '', cpu: null, mem: null, disk: null, lock: false });
   const nt = find(w, 'STATUS'), tt = find(w, 'CPU%');
-  if (nt) nt.r.forEach(r => { mk(r[0]).status = r[nt.h.indexOf('STATUS')] || '-'; });
+  if (nt) nt.r.forEach(r => { mk(r[0]).status = r[nt.h.indexOf('STATUS')] || ''; });
   if (tt) tt.r.forEach(r => { const n = mk(r[0]); n.cpu = R(r[tt.h.indexOf('CPU%')]); n.mem = R(r[tt.h.indexOf('MEMORY%')]); });
   const pt = find(p, 'STATUS'), ptop = find(p, 'CPU(CORES)'), top = {};
   if (ptop) ptop.r.forEach(r => { top[r[0]] = { cpu: r[ptop.h.indexOf('CPU(CORES)')], mem: r[ptop.h.indexOf('MEMORY(BYTES)')] }; });
   const pods = pt ? pt.r.map(r => {
-    const h = pt.h, g = k => h.indexOf(k) >= 0 && r[h.indexOf(k)] ? r[h.indexOf(k)] : '-', x = top[r[0]] || {};
-    return { name: r[0], node: g('NODE'), ns: NS, status: g('STATUS'), restarts: parseInt(g('RESTARTS')) || 0, cpu: zero(x.cpu), mem: zero(x.mem), age: g('AGE') };
+    const h = pt.h, g = k => h.indexOf(k) >= 0 && r[h.indexOf(k)] ? r[h.indexOf(k)] : '', x = top[r[0]] || {};
+    return { name: r[0], node: g('NODE'), ns: NS, status: g('STATUS'), restarts: numOrNull(parseInt(g('RESTARTS'))), cpu: mv(x.cpu), mem: mv(x.mem), age: g('AGE') };
   }) : [];
   const dt = find(d, 'AVAILABLE');
   const deps = dt ? dt.r.map(r => {
-    const h = dt.h, rd = r[h.indexOf('READY')] || '0/0';
-    return { name: r[0], ready: rd, desired: parseInt(rd.split('/')[1]) || 0, avail: parseInt(r[h.indexOf('AVAILABLE')]) || 0, age: r[h.indexOf('AGE')] || '-' };
+    const h = dt.h, rd = r[h.indexOf('READY')] || '';
+    return { name: r[0], ready: rd, desired: parseInt(rd.split('/')[1]) || 0, avail: parseInt(r[h.indexOf('AVAILABLE')]) || 0, age: r[h.indexOf('AGE')] || '' };
   }) : [];
   const workers = Object.values(nodes);
   return workers.length || pods.length || deps.length ? { workers, pods, deployments: deps } : null;
 }
 /* --- Reduce Data Size: bersihkan field kosong + dedup ns + kompresi LZ-String (pods & deployments) --- */
 const UC = new WeakMap(), kb = n => (n / 1024).toFixed(1) + ' KB';
-const clean = o => Object.fromEntries(Object.entries(o).filter(([, v]) => v != null && v !== '-' && v !== false));
+const clean = o => Object.fromEntries(Object.entries(o).filter(([, v]) => v != null && v !== '' && v !== '-' && v !== false));   // buang yang kosong; nilai nol (0, "0m", "0Mi", "0%") TETAP disimpan
 function inflate(r) {   // ambil pods & deployments mentah (terkompresi maupun data lama)
   if (!r.compressedPayload) return { pods: r.pods, deployments: r.deployments ?? r.deps };
   try { const o = JSON.parse(LZString.decompressFromUTF16(r.compressedPayload)); return { pods: o.pods, deployments: o.deployments }; }
@@ -115,14 +116,15 @@ function packRecord(rec) {
   else { out.pods = pods; out.deployments = deployments; console.warn('LZ-String tidak termuat, data disimpan tanpa kompresi'); }
   return out;
 }
+const dash = o => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, v === '-' ? '' : v]));   // data lama bertanda "-" => kosong
 function unpackRecord(r) {   // kompatibel data lama (tanpa kompresi) & baru (compressedPayload)
   if (!r) return r;
   if (UC.has(r)) return UC.get(r);
   const x = inflate(r), ns = r.ns || NS;
   const out = { ...r, ns,
-    workers: A(r.workers).map(w => ({ ip: '-', status: '-', cpu: null, mem: null, disk: null, lock: false, ...w })),
-    pods: A(x.pods).map(p => ({ name: '-', node: '-', status: '-', restarts: 0, cpu: '-', mem: '-', age: '-', ...p, ns: p.ns || ns })),
-    deployments: A(x.deployments).map(d => ({ name: '-', ready: '0/0', desired: 0, avail: 0, age: '-', ...d })) };
+    workers: A(r.workers).map(w => ({ ip: '', status: '', cpu: null, mem: null, disk: null, lock: false, ...dash(w) })),
+    pods: A(x.pods).map(p => ({ name: '', node: '', status: '', restarts: null, cpu: '', mem: '', age: '', ...dash(p), ns: p.ns || ns })),
+    deployments: A(x.deployments).map(d => ({ name: '', ready: '', desired: 0, avail: 0, age: '', ...dash(d) })) };
   UC.set(r, out); return out;
 }
 const summary = r => { const s = sm(r); return { ready: s.ready, notReady: s.nr, running: s.run, failed: s.fail, depAvailable: s.da, depTotal: s.td, peakWorkerCpu: s.H, peakWorkerMem: s.I, peakPodCpu: s.pc, peakPodMem: s.pm, overall: s.st }; };
@@ -150,7 +152,7 @@ function doParse() {
 
 /* ============ RINGKASAN & RUMUS ============ */
 const mx = (w, k) => { let b = null; w.forEach(x => { if (x[k] != null && (b == null || x[k] > b[k])) b = x; }); return b; };
-const mp = (p, k, u) => { const v = p.map(x => parseInt(x[k])).filter(n => n > 0); return v.length ? Math.max(...v) + u : '-'; };
+const mp = (p, k, u) => { const v = p.map(x => parseInt(x[k])).filter(n => !isNaN(n)); return v.length ? Math.max(...v) + u : ''; };   // "0m"/"0Mi" tetap tampil; "" jika tak ada metrics
 function sm(r) {
   r = unpackRecord(r);
   const w = A(r.workers), p = A(r.pods), d = A(r.deployments);
@@ -178,11 +180,11 @@ function updateDbUsage() {
   el.innerHTML = `<i class="fa-solid fa-database me-1"></i> Cloud Storage: <b>${sz}</b> / 1 GB (${pct.toFixed(4)}%)`;
 }
 function kpi(r) {
-  if (!r) { ['k1', 'k2', 'k3', 'k4'].forEach(k => $(k).innerHTML = '<div class="kv">-</div><div class="ks">Belum ada data</div>'); return; }
+  if (!r) { ['k1', 'k2', 'k3', 'k4'].forEach(k => $(k).innerHTML = '<div class="kv">&nbsp;</div><div class="ks">Belum ada data</div>'); return; }
   const s = sm(r);
   $('k1').innerHTML = `<div class="kv">${s.ready}/${s.w.length}</div><div class="ks">Ready &nbsp;|&nbsp; <b>${s.nr}</b> Not Ready</div>`;
   $('k2').innerHTML = `<div class="kv">${s.run}/${s.tp}</div><div class="ks">Running &nbsp;|&nbsp; <b>${s.fail}</b> Failed</div>`;
-  $('k3').innerHTML = `<div class="kv">${P(s.H)} / ${P(s.I)}</div><div class="ks">CPU ${s.bc ? esc(s.bc.ip) : '-'} &nbsp;|&nbsp; Mem ${s.bm ? esc(s.bm.ip) : '-'}</div>`;
+  $('k3').innerHTML = `<div class="kv">${s.H == null && s.I == null ? '&nbsp;' : P(s.H) + ' / ' + P(s.I)}</div><div class="ks">CPU ${s.bc ? esc(s.bc.ip) : ''} &nbsp;|&nbsp; Mem ${s.bm ? esc(s.bm.ip) : ''}</div>`;
   $('k4').innerHTML = `<span class="bdg big ${s.st}">${SL[s.st]}</span><div class="ks">Data ${fd(cur)}</div>`;
 }
 const filtered = () => { const f = $('fFrom').value, t = $('fTo').value, m = $('fMon').value; return dates().filter(id => { const d = id.slice(0, 10); return (!f || d >= f) && (!t || d <= t) && (!m || d.startsWith(m)); }); };
@@ -194,7 +196,7 @@ function exec() {
 }
 function detail(r) {
   const s = r ? sm(r) : { w: [], p: [], d: [] };
-  $('tb2').innerHTML = s.w.map((x, i) => `<tr class="${[x.cpu, x.mem, x.disk].some(v => v > 80) ? 'anomaly' : ''}"><td>${esc(x.ip)}</td><td>${bd(/^ready/i.test(x.status) ? 'HEALTHY' : 'CRITICAL').replace(SL.HEALTHY, esc(x.status)).replace(SL.CRITICAL, esc(x.status))}</td><td>${P(x.cpu)}</td><td>${P(x.mem)}</td><td>${x.lock ? P(x.disk) + ' <i class="fa-solid fa-lock text-muted small" title="Terkunci"></i>' : `<input class="form-control form-control-sm disk-in" data-i="${i}" placeholder="isi %" inputmode="decimal">`}</td><td>${bd(rm(x))}</td></tr>`).join('') || '<tr><td colspan="6" class="text-center text-muted py-3">Belum ada data</td></tr>';
+  $('tb2').innerHTML = s.w.map((x, i) => `<tr class="${[x.cpu, x.mem, x.disk].some(v => v > 80) ? 'anomaly' : ''}"><td>${esc(x.ip)}</td><td>${!x.status ? '' : bd(/^ready/i.test(x.status) ? 'HEALTHY' : 'CRITICAL').replace(SL.HEALTHY, esc(x.status)).replace(SL.CRITICAL, esc(x.status))}</td><td>${P(x.cpu)}</td><td>${P(x.mem)}</td><td>${x.lock ? P(x.disk) + ' <i class="fa-solid fa-lock text-muted small" title="Terkunci"></i>' : `<input class="form-control form-control-sm disk-in" data-i="${i}" placeholder="isi %" inputmode="decimal">`}</td><td>${bd(rm(x))}</td></tr>`).join('') || '<tr><td colspan="6" class="text-center text-muted py-3">Belum ada data</td></tr>';
   $('tb3').innerHTML = s.p.map(x => `<tr class="${x.restarts > 10 ? 'anomaly' : ''}"><td>${esc(x.name)}</td><td>${esc(x.node)}</td><td>${esc(x.ns)}</td><td>${pb(x.status)}</td><td>${x.restarts}</td><td>${esc(x.cpu)}</td><td>${esc(x.mem)}</td><td>${esc(x.age)}</td></tr>`).join('') || '<tr><td colspan="8" class="text-center text-muted py-3">Belum ada data</td></tr>';
   $('tb4').innerHTML = s.d.map(x => `<tr><td>${esc(x.name)}</td><td>${esc(x.ready)}</td><td>${x.avail}</td><td>${esc(x.age)}</td></tr>`).join('') || '<tr><td colspan="4" class="text-center text-muted py-3">Belum ada data</td></tr>';
   applyQ();
@@ -357,19 +359,19 @@ $('tb1').addEventListener('click', e => {
 });
 
 /* ============ BACKUP & RESTORE JSON ============ */
-const U = (v, unit) => { v = v == null ? '' : String(v).trim(); return zero(/^\d+(\.\d+)?$/.test(v) ? v + unit : v); };
+const U = (v, unit) => { v = v == null ? '' : String(v).trim(); return mv(/^\d+(\.\d+)?$/.test(v) ? v + unit : v); };   // 0 => "0m"/"0Mi"; kosong => ""
 const pick = (o, ...k) => { for (const x of k) if (o && o[x] != null && o[x] !== '') return o[x]; return null; };
 function norm(r) {   // normalisasi 1 record (format lama / baru) -> struktur Firebase
   if (!r || typeof r !== 'object') return null;
   const raw = String(r.id || ''), parts = raw.split(/[|_]/), date = String(r.date || parts[0]).slice(0, 10);
   if (!DATE_RE.test(date)) return null;
   const cleanId = `${date}_${sanitizeKey(ENV)}`, X = inflate(r);   // ID sama persis dengan doParse(); X = pods/deployments (otomatis dekompresi)
-  const workers = A(r.workers).map(w => { const disk = R(pick(w, 'disk', 'diskPct', 'disk%', 'diskPercent')); return { ip: String(pick(w, 'ip', 'name', 'node', 'worker') || '-'), status: String(pick(w, 'status') || '-'), cpu: R(pick(w, 'cpu', 'cpuPct', 'cpu%', 'cpuPercent')), mem: R(pick(w, 'mem', 'memory', 'memPct', 'mem%', 'memoryPct', 'memoryPercent')), disk, lock: disk != null }; });
-  const pods = A(X.pods).map(p => ({ name: String(pick(p, 'name', 'pod', 'podName') || '-'), node: String(pick(p, 'node', 'nodeName') || '-'), ns: String(pick(p, 'ns', 'namespace') || NS), status: String(pick(p, 'status', 'phase') || '-'), restarts: parseInt(pick(p, 'restarts', 'restart', 'restartCount')) || 0, cpu: U(pick(p, 'cpu'), 'm'), mem: U(pick(p, 'mem', 'memory'), 'Mi'), age: String(pick(p, 'age') || '-') }));
+  const workers = A(r.workers).map(w => { const disk = R(pick(w, 'disk', 'diskPct', 'disk%', 'diskPercent')); return { ip: String(pick(w, 'ip', 'name', 'node', 'worker') || ''), status: String(pick(w, 'status') || ''), cpu: R(pick(w, 'cpu', 'cpuPct', 'cpu%', 'cpuPercent')), mem: R(pick(w, 'mem', 'memory', 'memPct', 'mem%', 'memoryPct', 'memoryPercent')), disk, lock: disk != null }; });
+  const pods = A(X.pods).map(p => ({ name: String(pick(p, 'name', 'pod', 'podName') || ''), node: String(pick(p, 'node', 'nodeName') || ''), ns: String(pick(p, 'ns', 'namespace') || NS), status: String(pick(p, 'status', 'phase') || ''), restarts: numOrNull(parseInt(pick(p, 'restarts', 'restart', 'restartCount'))), cpu: U(pick(p, 'cpu'), 'm'), mem: U(pick(p, 'mem', 'memory'), 'Mi'), age: String(pick(p, 'age') || '') }));
   const deployments = A(X.deployments).map(d => {
     const rd = String(pick(d, 'ready') || ''), m = rd.match(/(\d+)\s*\/\s*(\d+)/);
     const avail = parseInt(pick(d, 'available', 'avail', 'availableReplicas') ?? (m ? m[1] : 0)) || 0, desired = m ? +m[2] : (parseInt(pick(d, 'desired', 'replicas')) || 0);
-    return { name: String(pick(d, 'name', 'deployment') || '-'), ready: m ? rd : `${avail}/${desired}`, desired, avail, age: String(pick(d, 'age') || '-') };
+    return { name: String(pick(d, 'name', 'deployment') || ''), ready: m ? rd : `${avail}/${desired}`, desired, avail, age: String(pick(d, 'age') || '') };
   });
   const rec = { id: cleanId, date, env: ENV, ns: NS, workers, pods, deployments };
   rec.summary = r.summary && r.summary.overall ? r.summary : summary(rec);   // hitung ulang jika belum ada
