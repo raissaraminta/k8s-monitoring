@@ -30,3 +30,5 @@ pre.cmd{background:#0F172A;color:#E2E8F0;padding:.8rem;border-radius:8px;font-si
 .disk-in{width:90px}
 .toast-lite{position:fixed;right:1rem;bottom:1rem;z-index:2000;padding:.65rem 1rem;border-radius:10px;color:#fff;font-weight:600;background:var(--p);box-shadow:0 6px 20px rgba(0,0,0,.2)}
 .toast-lite.danger{background:#B91C1C}
+.app-foot{padding:1rem;text-align:center;font-size:.78rem}
+.db-pill{display:inline-block;padding:.3rem .85rem;border-radius:999px;background:#fff;border:1px solid var(--bd)}
