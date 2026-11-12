@@ -98,6 +98,33 @@ function parse(txt) {
   const workers = Object.values(nodes);
   return workers.length || pods.length || deps.length ? { workers, pods, deployments: deps } : null;
 }
+/* --- Reduce Data Size: bersihkan field kosong + dedup ns + kompresi LZ-String (pods & deployments) --- */
+const UC = new WeakMap(), kb = n => (n / 1024).toFixed(1) + ' KB';
+const clean = o => Object.fromEntries(Object.entries(o).filter(([, v]) => v != null && v !== '-' && v !== false));
+function inflate(r) {   // ambil pods & deployments mentah (terkompresi maupun data lama)
+  if (!r.compressedPayload) return { pods: r.pods, deployments: r.deployments ?? r.deps };
+  try { const o = JSON.parse(LZString.decompressFromUTF16(r.compressedPayload)); return { pods: o.pods, deployments: o.deployments }; }
+  catch (e) { console.error('Gagal dekompresi record', r.id, e); return { pods: [], deployments: [] }; }
+}
+function packRecord(rec) {
+  const workers = A(rec.workers).map(clean);
+  const pods = A(rec.pods).map(p => { const { ns, ...x } = p; if (ns && ns !== NS) x.ns = ns; return clean(x); });   // ns cukup di root
+  const deployments = A(rec.deployments).map(clean);
+  const out = { id: rec.id, date: rec.date, env: rec.env, ns: rec.ns || NS, workers, summary: rec.summary };
+  if (typeof LZString !== 'undefined') out.compressedPayload = LZString.compressToUTF16(JSON.stringify({ pods, deployments }));
+  else { out.pods = pods; out.deployments = deployments; console.warn('LZ-String tidak termuat, data disimpan tanpa kompresi'); }
+  return out;
+}
+function unpackRecord(r) {   // kompatibel data lama (tanpa kompresi) & baru (compressedPayload)
+  if (!r) return r;
+  if (UC.has(r)) return UC.get(r);
+  const x = inflate(r), ns = r.ns || NS;
+  const out = { ...r, ns,
+    workers: A(r.workers).map(w => ({ ip: '-', status: '-', cpu: null, mem: null, disk: null, lock: false, ...w })),
+    pods: A(x.pods).map(p => ({ name: '-', node: '-', status: '-', restarts: 0, cpu: '-', mem: '-', age: '-', ...p, ns: p.ns || ns })),
+    deployments: A(x.deployments).map(d => ({ name: '-', ready: '0/0', desired: 0, avail: 0, age: '-', ...d })) };
+  UC.set(r, out); return out;
+}
 const summary = r => { const s = sm(r); return { ready: s.ready, notReady: s.nr, running: s.run, failed: s.fail, depAvailable: s.da, depTotal: s.td, peakWorkerCpu: s.H, peakWorkerMem: s.I, peakPodCpu: s.pc, peakPodMem: s.pm, overall: s.st }; };
 function doParse() {
   const txt = $('cli').value, date = $('pdate').value;
@@ -107,11 +134,12 @@ function doParse() {
   if (!r) return toast('Header "=== WORKER NODES ===" dst. tidak ditemukan atau tabel kosong', 'danger');
   const cleanEnv = sanitizeKey(ENV), id = `${date}_${cleanEnv}`, old = A((DB[id] || {}).workers);   // 2026-10-29_Prod_BTN_Syariah_Kubernetes
   r.workers.forEach(w => { const o = old.find(x => x.ip === w.ip); if (o && o.lock) { w.disk = o.disk; w.lock = true; } });   // pertahankan Disk terkunci
-  const rec = { id, date, env: ENV, ...r }; rec.summary = summary(rec);
+  const rec = { id, date, env: ENV, ns: NS, ...r }; rec.summary = summary(rec);
+  const packed = packRecord(rec), before = new Blob([JSON.stringify(rec)]).size, after = new Blob([JSON.stringify(packed)]).size;
   cur = id;
-  firebase.database().ref('k8s_monitoring/records/' + id).set(JSON.parse(JSON.stringify(rec)))
+  firebase.database().ref('k8s_monitoring/records/' + id).set(JSON.parse(JSON.stringify(packed)))
     .then(() => {
-      toast(`Berhasil tersimpan ke Cloud Firebase!`);
+      toast(`Tersimpan! Ukuran data dikompresi ${Math.max(0, Math.round((1 - after / before) * 100))}% (dari ${kb(before)} menjadi ${kb(after)})`);
       $('cli').value = '';
     })
     .catch(e => {
@@ -124,6 +152,7 @@ function doParse() {
 const mx = (w, k) => { let b = null; w.forEach(x => { if (x[k] != null && (b == null || x[k] > b[k])) b = x; }); return b; };
 const mp = (p, k, u) => { const v = p.map(x => parseInt(x[k])).filter(n => n > 0); return v.length ? Math.max(...v) + u : '-'; };
 function sm(r) {
+  r = unpackRecord(r);
   const w = A(r.workers), p = A(r.pods), d = A(r.deployments);
   const ready = w.filter(x => /^ready/i.test(x.status)).length, nr = w.length - ready;
   const run = p.filter(x => /^running$/i.test(x.status)).length, fail = p.filter(x => /^failed$/i.test(x.status)).length;   // Failed = strict
@@ -138,8 +167,15 @@ function render() {
   if (document.activeElement && document.activeElement.classList.contains('disk-in')) return;
   $('dsel').innerHTML = dates().reverse().map(d => `<option value="${d}" ${d === cur ? 'selected' : ''}>${fd(d)}${DB[d].env && DB[d].env !== ENV ? ' - ' + esc(DB[d].env) : ''}</option>`).join('') || '<option value="">-</option>';
   const r = DB[cur];
-  syncMon(); kpi(r); exec(); detail(r);
+  syncMon(); updateDbUsage(); kpi(r); exec(); detail(r);
   if (tabNow === 't2') drawCharts();
+}
+function updateDbUsage() {
+  const el = $('dbUsageInfo'); if (!el) return;
+  const bytes = new Blob([JSON.stringify(DB || {})]).size, QUOTA = 1073741824, pct = bytes / QUOTA * 100;
+  const sz = bytes >= 1048576 ? (bytes / 1048576).toFixed(2) + ' MB' : (bytes / 1024).toFixed(2) + ' KB';
+  el.className = 'db-pill ' + (pct > 80 ? 'text-danger fw-semibold' : 'text-muted');
+  el.innerHTML = `<i class="fa-solid fa-database me-1"></i> Cloud Storage: <b>${sz}</b> / 1 GB (${pct.toFixed(4)}%)`;
 }
 function kpi(r) {
   if (!r) { ['k1', 'k2', 'k3', 'k4'].forEach(k => $(k).innerHTML = '<div class="kv">-</div><div class="ks">Belum ada data</div>'); return; }
@@ -327,17 +363,17 @@ function norm(r) {   // normalisasi 1 record (format lama / baru) -> struktur Fi
   if (!r || typeof r !== 'object') return null;
   const raw = String(r.id || ''), parts = raw.split(/[|_]/), date = String(r.date || parts[0]).slice(0, 10);
   if (!DATE_RE.test(date)) return null;
-  const cleanId = `${date}_${sanitizeKey(ENV)}`;   // sama persis dengan ID dari doParse()
+  const cleanId = `${date}_${sanitizeKey(ENV)}`, X = inflate(r);   // ID sama persis dengan doParse(); X = pods/deployments (otomatis dekompresi)
   const workers = A(r.workers).map(w => { const disk = R(pick(w, 'disk', 'diskPct', 'disk%', 'diskPercent')); return { ip: String(pick(w, 'ip', 'name', 'node', 'worker') || '-'), status: String(pick(w, 'status') || '-'), cpu: R(pick(w, 'cpu', 'cpuPct', 'cpu%', 'cpuPercent')), mem: R(pick(w, 'mem', 'memory', 'memPct', 'mem%', 'memoryPct', 'memoryPercent')), disk, lock: disk != null }; });
-  const pods = A(r.pods).map(p => ({ name: String(pick(p, 'name', 'pod', 'podName') || '-'), node: String(pick(p, 'node', 'nodeName') || '-'), ns: String(pick(p, 'ns', 'namespace') || NS), status: String(pick(p, 'status', 'phase') || '-'), restarts: parseInt(pick(p, 'restarts', 'restart', 'restartCount')) || 0, cpu: U(pick(p, 'cpu'), 'm'), mem: U(pick(p, 'mem', 'memory'), 'Mi'), age: String(pick(p, 'age') || '-') }));
-  const deployments = A(r.deps ?? r.deployments).map(d => {
+  const pods = A(X.pods).map(p => ({ name: String(pick(p, 'name', 'pod', 'podName') || '-'), node: String(pick(p, 'node', 'nodeName') || '-'), ns: String(pick(p, 'ns', 'namespace') || NS), status: String(pick(p, 'status', 'phase') || '-'), restarts: parseInt(pick(p, 'restarts', 'restart', 'restartCount')) || 0, cpu: U(pick(p, 'cpu'), 'm'), mem: U(pick(p, 'mem', 'memory'), 'Mi'), age: String(pick(p, 'age') || '-') }));
+  const deployments = A(X.deployments).map(d => {
     const rd = String(pick(d, 'ready') || ''), m = rd.match(/(\d+)\s*\/\s*(\d+)/);
     const avail = parseInt(pick(d, 'available', 'avail', 'availableReplicas') ?? (m ? m[1] : 0)) || 0, desired = m ? +m[2] : (parseInt(pick(d, 'desired', 'replicas')) || 0);
     return { name: String(pick(d, 'name', 'deployment') || '-'), ready: m ? rd : `${avail}/${desired}`, desired, avail, age: String(pick(d, 'age') || '-') };
   });
-  const rec = { id: cleanId, date, env: ENV, workers, pods, deployments };
+  const rec = { id: cleanId, date, env: ENV, ns: NS, workers, pods, deployments };
   rec.summary = r.summary && r.summary.overall ? r.summary : summary(rec);   // hitung ulang jika belum ada
-  return rec;
+  return packRecord(rec);   // kurangi ukuran sebelum .set() ke Firebase
 }
 function readBackup(o) {
   if (o && Array.isArray(o.records)) return { recs: o.records, legacy: !(o.version >= 2) };
