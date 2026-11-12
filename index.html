@@ -9,7 +9,22 @@
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link href="style.css" rel="stylesheet">
 </head>
-<body>
+<body class="locked">
+<!-- Login Overlay (menutupi seluruh dashboard sebelum login) -->
+<div id="loginOverlay" class="login-overlay">
+  <div class="card login-card">
+    <div class="login-logo"><i class="fa-solid fa-dharmachakra"></i></div>
+    <h5 class="fw-bold text-center mb-1">Kubernetes Monitoring Access</h5>
+    <p class="text-center text-muted small mb-4">Silakan login untuk mengakses data cluster</p>
+    <form id="loginForm" novalidate>
+      <div class="mb-3"><label for="loginEmail" class="form-label small fw-semibold">Email</label><input type="email" id="loginEmail" class="form-control" autocomplete="username" placeholder="nama@perusahaan.com"></div>
+      <div class="mb-3"><label for="loginPass" class="form-label small fw-semibold">Password</label><input type="password" id="loginPass" class="form-control" autocomplete="current-password" placeholder="Password"></div>
+      <div id="loginErr" class="alert alert-danger py-2 small d-none" role="alert"></div>
+      <button type="submit" id="loginBtn" class="btn btn-primary w-100" disabled><span class="spinner-border spinner-border-sm me-2"></span>Memeriksa sesi...</button>
+    </form>
+  </div>
+</div>
+
 <nav class="navbar app-nav sticky-top px-3">
   <span class="navbar-brand text-white fw-bold mb-0"><i class="fa-solid fa-dharmachakra me-2"></i>K8s Daily Monitoring</span>
   <div class="d-flex align-items-center gap-3">
@@ -22,6 +37,10 @@
         <li><hr class="dropdown-divider"></li>
         <li><a class="dropdown-item text-danger" href="#" id="rst"><i class="fa-solid fa-trash-can me-2"></i>Reset Data</a></li>
       </ul>
+    </div>
+    <div class="d-flex align-items-center gap-2 ps-3 border-start border-light border-opacity-25">
+      <span id="userEmail" class="user-email"></span>
+      <button id="btnLogout" class="btn btn-outline-light btn-sm"><i class="fa-solid fa-right-from-bracket me-1"></i>Logout</button>
     </div>
   </div>
 </nav>
@@ -162,6 +181,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
 <script src="app.js"></script>
 </body>
