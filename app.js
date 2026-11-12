@@ -41,20 +41,74 @@ function cp(txt) {
 function ask(msg, fn) { $('cmMsg').textContent = msg; cfm = fn; bootstrap.Modal.getOrCreateInstance($('mCf')).show(); }
 function setCS(on) { $('cs').className = 'cs ' + (on ? 'on' : 'off'); $('cs').textContent = on ? '🟢 Cloud Connected' : '🔴 Offline'; }
 
-/* ============ FIREBASE REALTIME SYNC ============ */
+/* ============ FIREBASE REALTIME SYNC + AUTHENTICATION ============ */
+let authUser = null, fbOk = false;
+const LOGIN_TXT = '<i class="fa-solid fa-right-to-bracket me-2"></i>Masuk / Login';
+const showLogin = on => { $('loginOverlay').classList.toggle('d-none', !on); document.body.classList.toggle('locked', on); };
+const loginMsg = m => { const e = $('loginErr'); e.textContent = m || ''; e.classList.toggle('d-none', !m); };
+function loginBusy(on) { const b = $('loginBtn'); b.disabled = on; b.innerHTML = on ? '<span class="spinner-border spinner-border-sm me-2"></span>Memproses...' : LOGIN_TXT; }
+function authErr(c = '') {   // pesan generik agar tidak membocorkan apakah email terdaftar
+  if (/invalid-credential|wrong-password|user-not-found|invalid-login/.test(c)) return 'Email atau password salah.';
+  if (/invalid-email/.test(c)) return 'Format email tidak valid.';
+  if (/user-disabled/.test(c)) return 'Akun ini dinonaktifkan. Hubungi admin.';
+  if (/too-many-requests/.test(c)) return 'Terlalu banyak percobaan gagal. Coba lagi beberapa menit lagi.';
+  if (/network/.test(c)) return 'Koneksi bermasalah. Periksa jaringan Anda.';
+  if (/operation-not-allowed/.test(c)) return 'Login Email/Password belum diaktifkan di Firebase Console.';
+  if (/api-key/.test(c)) return 'API Key Firebase tidak valid. Periksa firebaseConfig di app.js.';
+  return 'Login gagal (' + c + '). Silakan coba lagi.';
+}
 function initFirebase() {
   try {
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
     ref = db.ref('k8s_monitoring/records');
     db.ref('.info/connected').on('value', s => setCS(s.val() === true));
-    ref.on('value', s => {
-      DB = s.val() || {};   // key = recordId (YYYY-MM-DD_Environment)
-      if (!cur || !DB[cur]) cur = dates().slice(-1)[0] || null;
-      render();
-    }, e => { console.error('Firebase Read Error:', e); setCS(false); toast('Gagal membaca database: ' + e.message, 'danger'); });
-  } catch (e) { setCS(false); toast('Firebase belum dikonfigurasi (cek firebaseConfig di app.js)', 'danger'); }
+    fbOk = true;
+    firebase.auth().onAuthStateChanged(user => user ? onLogin(user) : onLogout());
+  } catch (e) {
+    console.error('Firebase Init Error:', e); setCS(false);
+    $('loginBtn').disabled = true; $('loginBtn').innerHTML = LOGIN_TXT;
+    loginMsg('Firebase belum dikonfigurasi (cek firebaseConfig di app.js).');
+  }
 }
+function startSync() {   // listener database hanya aktif saat user login
+  ref.off();             // cegah listener ganda
+  ref.on('value', s => {
+    DB = s.val() || {};   // key = recordId (YYYY-MM-DD_Environment)
+    if (!cur || !DB[cur]) cur = dates().slice(-1)[0] || null;
+    render();
+  }, e => {
+    if (!authUser) return;   // listener dibatalkan karena logout
+    console.error('Firebase Read Error:', e); setCS(false); toast('Gagal membaca database: ' + e.message, 'danger');
+  });
+}
+function onLogin(user) {
+  authUser = user;
+  $('userEmail').textContent = user.email || ''; $('userEmail').title = user.email || '';
+  $('loginPass').value = ''; loginMsg(''); loginBusy(false);
+  showLogin(false);
+  startSync();
+}
+function onLogout() {
+  authUser = null;
+  if (ref) ref.off();                                   // hentikan listener database
+  DB = {}; cur = null; lastMon = '';                    // hapus data dari memori browser
+  charts.forEach(c => c.destroy()); charts = [];
+  $('cli').value = ''; $('q').value = ''; $('userEmail').textContent = '';
+  document.querySelectorAll('.modal.show').forEach(m => { const i = bootstrap.Modal.getInstance(m); i && i.hide(); });
+  render();
+  loginBusy(false); showLogin(true);
+}
+$('loginForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const email = $('loginEmail').value.trim(), pass = $('loginPass').value;
+  if (!fbOk) return loginMsg('Firebase belum dikonfigurasi (cek firebaseConfig di app.js).');
+  if (!email || !pass) return loginMsg('Email dan password wajib diisi.');
+  loginMsg(''); loginBusy(true);
+  firebase.auth().signInWithEmailAndPassword(email, pass)
+    .catch(err => { console.error('Login Error:', err.code); loginMsg(authErr(err.code)); loginBusy(false); $('loginPass').value = ''; });
+});
+$('btnLogout').onclick = () => { if (ref) ref.off(); firebase.auth().signOut().catch(e => toast('Gagal logout: ' + e.message, 'danger')); };
 
 /* ============ PARSER CLI ============ */
 const HDRS = 'WORKER NODES|PODS STATUS|DEPLOYMENTS STATUS';
